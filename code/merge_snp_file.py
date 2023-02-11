@@ -1,6 +1,9 @@
 #!/usr/bin/python
 import optparse
 import sys 
+import pandas as pd
+import re
+import numpy as np
 
 #Parse options
 parser = optparse.OptionParser()
@@ -26,7 +29,7 @@ for f in range(0,len(snpfilelist),1):
         line_s=line_s1.rstrip().split('\t')
         if line_s[0][0]!="#" and len(line_s)>0:
             gene=line_s[0]
-            snps=line_s[1].split(',')
+            snps=line_s[1:]
             if gene in snptable:
                 snptable[gene][1]=snptable[gene][1]+snps
             else:
@@ -35,11 +38,25 @@ for f in range(0,len(snpfilelist),1):
      
 #Write Output
 outfile=open(options.outfilename, "w")
-outfile.write("#GENE\tSNPS\n")
+#outfile.write("#GENE\tSNPS\n")
 for x in snptable:
     if len(x)>0:
     #Read through hash table and print out variants
-        snp_out=','.join(snptable[x][1])
+        #snp_out=','.join(snptable[x][1])
+        df=pd.DataFrame()
+        for ele in snptable[x][1]:
+            ser=ele.replace("chr", "")
+            ser=ser.replace("X", "23")
+            ser=pd.Series(re.split('_|:',ser))
+            ser=ser.to_frame().T
+            ser[0]=np.array(ser[0].astype(int))
+            ser[1]=np.array(ser[1].astype(int))
+            df=df.append(ser,ignore_index=True)
+        df.columns=["chr", "pos", "vars"]
+        df = df.sort_values(['chr','pos'], ascending=True)
+        c = [ snptable[x][1][i] for i in df.index]
+        #snp_out = '\t'.join(snptable[x][1])
+        snp_out = '\t'.join(c)
         outfile.write(str(x)+"\t"+snp_out+"\n")
 outfile.close()
                     

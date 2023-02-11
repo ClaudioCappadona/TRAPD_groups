@@ -8,11 +8,11 @@ import bisect
 
 #Parse options
 parser = optparse.OptionParser()
-parser.add_option("-s", "--snpfile", action="store",dest="snpfilename") #File matching SNPs to genes
+parser.add_option("-s", "--snpfile", action="store",dest="snpfilename") #File matching SNPs to genes (grp file)
 parser.add_option("-v", "--vcffile", action="store",dest="vcffilename") #Path to vcf file
 parser.add_option("-o", "--outfile", action="store",dest="outfilename", default="case_counts.txt") #Output file name 
 
-parser.add_option("--snpformat", action="store",dest="snpformat", default="CHRPOSREFALT") #Field in which to get SNP names. If not VCF ID, then CHR:POS:REF:ALT is used
+parser.add_option("--snpformat", action="store",dest="snpformat", default="EPACTS") #Field in which to get SNP names. If not VCF ID, then CHR:POS:REF:ALT is used
 parser.add_option("--samplefile", action="store",dest="samplefilename", default="ALL")
 
 #Optional Filters
@@ -35,10 +35,15 @@ if not options.vcffilename:   # if vcf filename is not given
 if options.vcffilename.endswith(".gz") is False:   # if vcf filename is not given
     parser.error('Is your vcf file gzipped?')
 
-vcffile=gzip.open(options.vcffilename, "rb")
+#requires python3 and won't open vcf files if using python2
+    
+#vcffile=gzip.open(options.vcffilename, "rb")
+vcffile=gzip.open(options.vcffilename, 'rt', encoding='utf-8')
+#default chromosome format
 chrformat="number"
 for line_vcf1 in vcffile:
-	line_vcf=line_vcf1.split("\t")
+    #here I added a .strip() to prevent mismatch with sample sample when providing samplefilename due to \n
+	line_vcf=line_vcf1.strip().split("\t")
 	if "##contig" in line_vcf[0]:
 		if "ID=chr" in line_vcf[0]:
 			chrformat="chr"
@@ -46,7 +51,7 @@ for line_vcf1 in vcffile:
 		#This takes the vcf header line and finds the indices corresponding to the individuals present in the sample file
 		samplenames=line_vcf[9:]
 
-		#If User doesn't provide sample list, assume all samples in vcf
+		#If User doesn't provide sample list, assume all samples in vcf and create samples index
 		if options.samplefilename=="ALL":
 			sampleindices=range(0, len(samplenames),1)
 
@@ -69,20 +74,28 @@ def findcarriers(vcfline, gtname, snpformat, samplelist, max_ac, max_af, min_an)
 
 	if snpformat=="VCFID":
 		snpid=vcfline[2]
+	elif snpformat=="EPACTS":
+		#snpid=str(vcfline[0]).lstrip("chr")+":"+str(vcfline[1])+"_"+str(vcfline[3])+"/"+str(vcfline[4])
+		snpid=str(vcfline[0])+":"+str(vcfline[1])+"_"+str(vcfline[3])+"/"+str(vcfline[4])
 	else:
 		snpid=str(vcfline[0]).lstrip("chr")+":"+str(vcfline[1])+":"+str(vcfline[3])+":"+str(vcfline[4])
 	
 	#Extract genotypes 
 	gt=[i.split(':')[gtcol] for i in vcfline[9:]]
 
-	#Find carriers
+	#Find ALL hets and homs
 	hets=[i for i,val in enumerate(gt) if str(val) in ["0/1", "1/0", "0|1", "1|0"]]
-	hetcarriers=list(set(hets) & set(samplelist))
 	homs=[i for i,val in enumerate(gt) if str(val) in ["1/1", "1|1"]]
+
+	#Filter for carriers in samplelist
+	hetcarriers=list(set(hets) & set(samplelist))
 	homcarriers=list(set(homs) & set(samplelist))
-	
+    
+	#allele count
 	ac_file=(float(len(hets)+2*len(homs)))
+	#allele frequency
 	af_file=ac_file/(2*(float(len(gt))))
+	#allele number
 	an_file=2*(float(len(gt)))
 	
 	if (ac_file>float(max_ac)) or (af_file>float(max_af)) or (an_file<float(min_an)):
@@ -92,7 +105,7 @@ def findcarriers(vcfline, gtname, snpformat, samplelist, max_ac, max_af, min_an)
 		return [hetcarriers, homcarriers, ac_out]
 
 
-def makesnplist(snpfile):
+def makesnplist(snpfile, snpformat):
 	#Makes a list of SNPs present in the snpfile
 	snplist=[]
 	#Read in snpfile
@@ -100,36 +113,38 @@ def makesnplist(snpfile):
 	
 	for line_snp1 in snp_file:
 		line_snp=line_snp1.rstrip('\n').split('\t')
-
 		#Find column corresponding to desired snps
 		if line_snp[0]!="GENE":
-			snplist=snplist+line_snp[1].split(",")
+			if snpformat=="EPACTS":
+				snplist=snplist+line_snp
+			else:         
+				snplist=snplist+line_snp[1].split(",")
 	return set(snplist)
 	snp_file.close()
 
 
 def calculatecount(genesnps, snptable):
 	#This will generate an aggregate count for a given gene.
-        all_index=[]
+	all_index=[]
 	het_index=[]
 	hom_index=[]
 	total_ac=0
-        for s in range(0, len(genesnps), 1):
-                if genesnps[s] in snptable:
-                        tempsnp=genesnps[s]
+	for s in range(0, len(genesnps), 1):
+		if genesnps[s] in snptable:
+			tempsnp=genesnps[s]
 			het_index=het_index+snptable[tempsnp][1]
-	                hom_index=hom_index+snptable[tempsnp][2]
+			hom_index=hom_index+snptable[tempsnp][2]
 			total_ac=total_ac+snptable[tempsnp][3]
-	all_index=het_index+hom_index
-			
+			all_index=het_index+hom_index
+
 	#Generate number of individuals carrying one variant
-        count_het=len(set([x for x in het_index if het_index.count(x) > 0]))
+	count_het=len(set([x for x in het_index if het_index.count(x) > 0]))
 	count_ch=len(set([x for x in het_index if het_index.count(x) > 1]))
-        count_hom=len(list(set(hom_index)))
+	count_hom=len(list(set(hom_index)))
 	return [count_het, count_ch, count_hom, total_ac]
 
 #Make list of all SNPs across all genes present in snpfile
-allsnplist=makesnplist(options.snpfilename)
+allsnplist=makesnplist(options.snpfilename, options.snpformat)
 
 #Make a hashtable with keys as each SNP, and stores a list of indices of carriers for that SNP
 count_table={} 
@@ -143,17 +158,18 @@ if options.bedfilename is not None:
 		bed=open(options.bedfilename, "r")
 	bed_lower={}
 	bed_upper={}
-       	for line_b1 in bed:
-                line_b=line_b1.rstrip().split('\t')
-                chr=str(line_b[0]).lower().replace("chr", "")
+	for line_b1 in bed:
+		line_b=line_b1.rstrip().split('\t')
+		chr=str(line_b[0]).lower().replace("chr", "")
 		if chr not in bed_lower:
 			bed_lower[chr]=[chr, []]
 			bed_upper[chr]=[chr, []]
-                bed_lower[chr][1].append(int(line_b[1])+1)
-                bed_upper[chr][1].append(int(line_b[2]))
+			bed_lower[chr][1].append(int(line_b[1])+1)
+			bed_upper[chr][1].append(int(line_b[2]))
 	bed.close()	
 
-vcffile=gzip.open(options.vcffilename, "rb")
+#vcffile=gzip.open(options.vcffilename, "rb")
+vcffile=gzip.open(options.vcffilename, 'rt', encoding='utf-8')
 		
 for line_vcf1 in vcffile:
 	line_vcf=line_vcf1.rstrip().split('\t')
@@ -170,6 +186,9 @@ for line_vcf1 in vcffile:
 		if not (options.passfilter and line_vcf[6]!="PASS"):
 			if options.snpformat=="VCFID":
 				snpid=str(line_vcf[2])
+			elif options.snpformat=="EPACTS":
+				#snpid=str(line_vcf[0]).lower()+":"+str(line_vcf[1])+"_"+str(line_vcf[3])+"/"+str(line_vcf[4])
+				snpid=str(line_vcf[0])+":"+str(line_vcf[1])+"_"+str(line_vcf[3])+"/"+str(line_vcf[4])
 			else: 
 				snpid=str(line_vcf[0]).lower().replace("chr", "")+":"+str(line_vcf[1])+":"+str(line_vcf[3])+":"+str(line_vcf[4])
 			if (snpid in allsnplist) and (keep==1):
@@ -186,9 +205,13 @@ snpfile=open(options.snpfilename, "r")
 for line_s1 in snpfile:
 	line_s=line_s1.rstrip('\n').split('\t')
 	if line_s[0][0]!="#":
-		genesnplist=list(set(line_s[1].split(',')))
+		if options.snpformat=="EPACTS":
+			genesnplist=list(set(line_s))            
+		else:            
+			genesnplist=list(set(line_s[1].split(',')))
 		counts=calculatecount(genesnplist, count_table)
-		outfile.write(line_s[0]+"\t"+str(counts[0])+"\t"+str(counts[1])+"\t"+str(counts[2])+"\t"+str(counts[3])+'\n')
+		if(counts is not None):
+			outfile.write(line_s[0]+"\t"+str(counts[0])+"\t"+str(counts[1])+"\t"+str(counts[2])+"\t"+str(counts[3])+'\n')
 outfile.close()
 snpfile.close()
 
